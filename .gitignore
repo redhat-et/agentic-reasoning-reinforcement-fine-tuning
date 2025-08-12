@@ -1,0 +1,8 @@
+.ipynb_checkpoints/
+.env
+.env.*
+.venv/
+venv/
+.cache/
+wandb/
+checkpoints/
