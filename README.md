@@ -21,10 +21,12 @@ An incomplete list of recent products and research leveraging E2E RFT, all relea
 
 <h2>Roadmap</h2>
 
+Throughout this series of cookbook, you will utilize HuggingFace's Transformer Reinforcement Learning
+(TRL) and deploys Group Relative Policy Optimization (GRPO) technique to **define, train, and evaluate** your agent.
+
 Here is how to follow along with this repo.
 
-For viewers with familiarity 
-1. Beginner Handcraft your own reward function and fine-tune an LLM to play [WORDLE](https://en.wikipedia.org/wiki/Wordle) with the Huggingface TRL library.
-2. 
-3. Fine-tune a MCP server 
+For viewers familiar with the HuggingFace ecosystem, we encourage you to try the basic example with 
+1. Beginner Handcraft your own reward function and fine-tune an LLM to play a game with [WORDLE](https://en.wikipedia.org/wiki/Wordle) with the Huggingface TRL library's GRPO Trainer.
 
+(... Unsloth? Openpipe? Verl? Llamastack?)
