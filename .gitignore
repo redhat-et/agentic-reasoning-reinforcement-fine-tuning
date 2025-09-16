@@ -5,4 +5,7 @@
 venv/
 .cache/
 wandb/
+outputs/
+*.csv
+__pycache__/
 checkpoints/
