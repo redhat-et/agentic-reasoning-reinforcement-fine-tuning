@@ -1,21 +1,18 @@
-import os
+"""
+Wordle Util Functions for Playing WORDLE (Local Version)
+
+This module contains utils functions for prompting an LLM to play WORDLE
+Modified to work with local Hugging Face models instead of Predibase APIs
+"""
+
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import List
 import numpy as np
-
-from dotenv import load_dotenv
-from openai import OpenAI
-from transformers import AutoTokenizer
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from tabulate import tabulate
-from predibase import Predibase, DeploymentConfig
-
-
-load_dotenv() 
-
-base_model_id = "Qwen/Qwen2.5-7B-Instruct"
-tokenizer = AutoTokenizer.from_pretrained(base_model_id)
 
 
 SYSTEM_PROMPT = """
@@ -44,91 +41,6 @@ Think through the problem and feedback step by step. Make sure to first add your
 """
 
 
-client = OpenAI(
-    base_url=os.environ["PREDIBASE_MODEL_QWEN_URL"],
-    api_key=os.environ["PREDIBASE_API_KEY"],
-)
-
-best_of_client = OpenAI(
-    base_url=os.environ["PREDIBASE_MODEL_QWEN_URL"],
-    api_key=os.environ["PREDIBASE_API_KEY"],
-)
-
-
-def generate_stream(
-    prompt: str,
-    adapter_id: str = "",
-    temperature: float = 0.7,
-    max_tokens: int = 1024,
-    stream: bool = True,
-) -> str:
-    response = client.completions.create(
-        model=adapter_id,
-        prompt=prompt,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=stream,
-    )
-
-    completion = ""
-    for chunk in response:
-        if chunk.choices[0].text is not None:
-            content = chunk.choices[0].text
-            print(content, end="", flush=True)
-            completion += content
-    print()
-
-    return completion
-
-
-def generate(
-    messages: List[dict],
-    adapter_id: str = "",
-    num_guesses: int = 1,
-    temperature: float = 0.7,
-    max_tokens: int = 1024,
-) -> List[str]:
-    if temperature > 0.0:
-        completions = best_of_client.chat.completions.create(
-            model=adapter_id,
-            messages=messages,
-            n=num_guesses,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
-        return [choice.message.content for choice in completions.choices]
-    else:
-        return [
-            best_of_client.chat.completions.create(
-                model=adapter_id,
-                messages=messages,
-                n=1,
-                temperature=temperature,
-                max_tokens=max_tokens
-            ).choices[0].message.content for _ in range(num_guesses)
-        ]
-
-
-def create_deployment(name: str = "qwen2-5-7b-instruct-dlai"):
-    os.environ["PREDIBASE_GATEWAY"] = "https://api.staging.predibase.com"
-    pb = Predibase(api_token=os.environ["PREDIBASE_API_KEY"])
-    try:
-        pb.deployments.create(
-            name=name,
-            config=DeploymentConfig(
-                base_model="qwen2-5-7b-instruct",
-                min_replicas=0,
-                max_replicas=1,
-                cooldown_time=1200,
-                custom_args=[
-                    "--max-best-of", "32",
-                ]
-            )
-        )
-    except Exception:
-        print(f"Deployment {name} already exists")
-
-
 class LetterFeedback(Enum):
     CORRECT = "✓"
     WRONG_POS = "-"
@@ -136,6 +48,7 @@ class LetterFeedback(Enum):
 
 
 def get_feedback(guess: str, secret_word: str) -> List[LetterFeedback]:
+    """Generate feedback for a guess against the secret word."""
     valid_letters = set(secret_word)
     feedback = []
     for letter, secret_letter in zip(guess, secret_word):
@@ -163,6 +76,7 @@ class GuessWithFeedback:
 
 
 def render_user_prompt(past_guesses: List[GuessWithFeedback]) -> str:
+    """Create user prompt with past guesses."""
     prompt = "Make a new 5-letter word guess."
     if past_guesses:
         prompt += "\n\nHere is some previous feedback:"
@@ -172,6 +86,7 @@ def render_user_prompt(past_guesses: List[GuessWithFeedback]) -> str:
 
 
 def get_messages(past_guesses: List[GuessWithFeedback]):
+    """Create message list for the model."""
     return [
         {
             "role": "system",
@@ -188,55 +103,118 @@ def get_messages(past_guesses: List[GuessWithFeedback]):
     ]
 
 
-def render_prompt(past_guesses: List[GuessWithFeedback]):
-    messages = get_messages(past_guesses)
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, continue_final_message=True
+def generate_local(
+    model,
+    tokenizer,
+    messages: List[dict],
+    temperature: float = 0.7,
+    max_tokens: int = 1024,
+    verbose: bool = True
+) -> str:
+    """Generate completion using local model."""
+    
+    # Apply chat template
+    prompt = tokenizer.apply_chat_template(
+        messages, 
+        tokenize=False, 
+        continue_final_message=True
     )
+    
+    # Tokenize
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
+    
+    # Generate
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            top_p=0.95,
+            do_sample=True if temperature > 0 else False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    
+    # Decode
+    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    
+    # Extract only the new completion (remove the prompt)
+    completion = generated_text[len(tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=True)):]
+    
+    if verbose:
+        print(completion)
+    
+    return completion
 
 
 def extract_guess(completion: str) -> str:
-    match = re.search(r"<guess>\s*([\s\S]*?)\s*<\/guess>", completion, re.DOTALL)
+    """Extract the guess from model completion."""
+    match = re.search(r"<guess>\s*([\s\S]*?)\s*</guess>", completion, re.DOTALL)
     if not match:
         return ""
     return match.group(1).strip().upper()
 
 
-def next_turn(past_guesses: List[GuessWithFeedback], secret_word: str, adapter_id = ""):
-    prompt = render_prompt(past_guesses)
-    completion = generate_stream(prompt)
+def next_turn(model, tokenizer, past_guesses: List[GuessWithFeedback], secret_word: str, verbose: bool = True):
+    """Play one turn of Wordle."""
+    messages = get_messages(past_guesses)
+    completion = generate_local(model, tokenizer, messages, verbose=verbose)
     guess = extract_guess(completion)
-
+    
+    if not guess or len(guess) != 5:
+        if verbose:
+            print(f"Invalid guess extracted: '{guess}'")
+        return None
+    
     feedback = get_feedback(guess, secret_word)
     past_guesses.append(GuessWithFeedback(guess, feedback))
-    print("\n\n")
-    print(("-" * 100) + "\n")
-    for past_guess in past_guesses:
-        print(past_guess)
-
+    
+    if verbose:
+        print("\n" + ("-" * 50))
+        for past_guess in past_guesses:
+            print(past_guess)
+    
     if guess == secret_word:
-        print("🎉 SUCCESS 🎉")
+        if verbose:
+            print("🎉 SUCCESS 🎉")
+        return True
     elif len(past_guesses) >= 6:
-        print("❌ better luck next time... ❌")
+        if verbose:
+            print("❌ Better luck next time... ❌")
+        return False
+    
+    return None  # Game continues
+
+
+def play_full_game(model, tokenizer, secret_word: str, max_guesses: int = 6, verbose: bool = False):
+    """Play a full game of Wordle and return number of guesses and success status."""
+    past_guesses = []
+    
+    for _ in range(max_guesses):
+        result = next_turn(model, tokenizer, past_guesses, secret_word, verbose=verbose)
+        if result is not None:  # Game ended
+            return len(past_guesses), result
+    
+    # Should not reach here if next_turn works correctly
+    return len(past_guesses), False
 
 
 def compute_advantages(rewards: list):
+    """Compute advantages from rewards (for GRPO context)."""
     rewards = np.array(rewards)
     
-    # Compute the mean and standard deviation of the rewards
     mean_reward = np.mean(rewards)
     std_reward = np.std(rewards)
 
-    # Avoid division by zero in case of zero variance (typically happens when all rewards are 0)
     if std_reward == 0:
         return [0] * len(rewards)
 
-    # Divide by stddev of rewards to normalize range to 0
     advantages = (rewards - mean_reward) / std_reward
     return advantages.tolist()
 
 
 def print_guesses_table(extracted_guesses, rewards):
+    """Print formatted table of guesses and rewards."""
     advantages = compute_advantages(rewards)
     length = len(extracted_guesses)
     elems = list(zip(range(length), extracted_guesses, rewards, advantages))

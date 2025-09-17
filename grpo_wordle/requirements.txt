@@ -1,0 +1,22 @@
+# Core ML libraries
+torch==2.4.0
+
+# Chat Completetions
+predibase
+openai
+
+# Hugging Face ecosystem
+transformers==4.55.0
+datasets==3.5.0
+huggingface-hub==0.34.2
+accelerate==1.4.0
+
+# TRL and PEFT for reinforcement learning
+trl==0.21.0
+peft==0.15.2
+
+# Data processing
+pandas
+numpy
+seaborn
+scikit-learn

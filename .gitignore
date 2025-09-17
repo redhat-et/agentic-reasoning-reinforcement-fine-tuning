@@ -1,8 +1,12 @@
 .ipynb_checkpoints/
+.DS_Store
 .env
 .env.*
 .venv/
 venv/
 .cache/
 wandb/
+outputs/
+*.csv
+__pycache__/
 checkpoints/
